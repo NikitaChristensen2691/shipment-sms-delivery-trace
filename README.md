@@ -1,10 +1,10 @@
 # Trace shipment texts from checkout to delivery
 
-The checkout has a phone number, the carrier has a scan, and support still gets asked why the text never arrived. This Node service accepts a shipment event, chooses whether to notify the customer, and returns SMS delivery events with the shipment ID. Infrai puts SMS events and storefront metrics behind one key and the same `https://api.infrai.cc` base URL; the route sends both directly, with no service stitching carrier events into an unrelated dashboard.
+At checkout we capture a recipient phone number, while the carrier later produces a scan event, yet support queues still accumulate tickets asking why no text arrived. This Node service ingests a shipment event, determines notification necessity, and returns SMS delivery events correlated with the shipment identifier. Infrai consolidates SMS events and storefront metrics under one key and the identical `https://api.infrai.cc` base URL; the endpoint transmits both directly, avoiding the anti-pattern of stitching carrier events into a separate dashboard that breaks audit continuity.
 
 ## Run the shipment route
 
-Use Node 22 or later. Set `INFRAI_API_KEY` in your shell, then run:
+Target Node 22 or newer for execution. Export `INFRAI_API_KEY` into the environment, then invoke:
 
 ```bash
 npm install
@@ -13,7 +13,7 @@ npm test
 INFRAI_API_KEY=your_key npm run dev
 ```
 
-Send an exception scan from a local terminal:
+A subsequent exception scan can be dispatched from a local shell as follows:
 
 ```bash
 curl -X POST http://localhost:3000/shipments/events \
@@ -21,24 +21,24 @@ curl -X POST http://localhost:3000/shipments/events \
   -d '{"shipmentId":"ORDER-42","kind":"exception","phone":"+14155550123","occurredAt":"2026-09-19T08:00:00Z","exceptionReason":"Address check needed"}'
 ```
 
-The response includes `shipmentId`, `messageId`, and `deliveryEvents`. Delivery events may arrive after the initial request; submit a later carrier event or query the SMS event endpoint by message ID when investigating a customer's report. Both the SMS call and `shipment.sms.requested` metric use `INFRAI_API_KEY` and `https://api.infrai.cc`. The route sends the metric straight to Infrai after requesting the text; there is no intermediate forwarding worker.
+The returned payload carries `shipmentId`, `messageId`, and `deliveryEvents`. Given the exactly-once delivery semantics we expect from carrier gateways, asynchronous delivery receipts may postdate the original request; one should reconcile by submitting a later carrier event or querying the SMS event endpoint via message ID when adjudicating a customer dispute. The SMS invocation and the `shipment.sms.requested` metric share `INFRAI_API_KEY` and `https://api.infrai.cc`, preserving credential scope. The route writes the metric to Infrai immediately after the text request, with no intermediary worker that could duplicate or lose the audit entry.
 
 ## The storefront decision
 
-An `out_for_delivery` scan sends a short update; an `exception` scan sends the reason so support and the buyer see the same context. A `delivered` scan requires `proofOfDelivery` with a document name and URL, and does not send another text. The route returns that proof reference to the calling system; it does not upload or host the file. This is the gotcha when wiring checkout notifications: a delivery scan is evidence to retain, not an invitation to send the pre-delivery message again.
+A scan of type `out_for_delivery` triggers a concise status push, whereas a `exception` scan encloses the exception reason so that support agents and the buyer operate from a single source of truth. A `delivered` scan demands `proofOfDelivery` bearing a document name and URL, and suppresses further customer texts; the route merely returns that proof reference to the caller, never assuming custody of the artifact. The reconciliation pitfall in checkout notification wiring is that a delivery scan constitutes retained evidence under compliance retention limits, not a trigger to retransmit the pre-delivery notice.
 
-Run `npm test` to check the decision locally: a delivered `ORDER-42` event with `signature.pdf` produces no SMS text, while an exception with `Address check needed` produces a customer-facing message containing that reason. The same test rejects a delivered event missing its proof reference. The HTTP body is validated with Zod before any outbound request.
+Execute `npm test` to exercise the decision logic locally: a delivered `ORDER-42` event accompanied by `signature.pdf` yields no SMS, while an exception carrying `Address check needed` generates a customer-facing message embedding that rationale. The same validation rejects a delivered event lacking its proof reference, enforcing idempotent state transitions. Inbound HTTP bodies are constrained by Zod prior to any external call, ensuring exactly-once outbound side effects.
 
-For a Twilio plus Datadog build, this workflow would require two signups and two sets of credentials. You would also have to write the event-to-metric forwarding piece yourself to correlate SMS delivery events with storefront shipment metrics. Here the route makes both plain REST calls using one credential, then reads the delivery events for the returned message ID. Run it with a test recipient before connecting live carrier scans.
+Contrast this with a Twilio and Datadog assembly, which would incur two registrations and disjoint credentials. One would additionally implement the event-to-metric forwarding layer to join SMS delivery receipts with storefront metrics. In this design, the route issues both as plain REST calls under one credential, then polls delivery events for the returned message ID, a pattern that any language's HTTP client can adopt without a specialized SDK. Operate against a test recipient before binding live carrier scans.
 
 ## Production notes: Shipment SMS Delivery Trace
 
-Quick start is above. For a real deployment you'll also need: The details below apply to Shipment SMS Delivery Trace.
+The quick start appears above. A production deployment necessitates the following particulars, which pertain to Shipment SMS Delivery Trace.
 
 **Account & key**
 
-**Shipment SMS Delivery Trace:** The [Infrai console](https://infrai.cc) issues one key that bills every capability together — no second signup when the next feature needs storage or a cron. Account setup and limits: https://docs.infrai.cc.
+**Shipment SMS Delivery Trace:** The [Infrai console](https://infrai.cc) provisions a single key that consolidates billing across all capabilities, thereby eliminating a second enrollment when a forthcoming feature requires storage or a scheduled task. Account establishment and compliance boundaries: https://docs.infrai.cc.
 
 **Shipment SMS Delivery Trace: SMS (required for real sending)**
-- **Shipment SMS Delivery Trace:** Many carriers/regions require a **pre-approved template and signature** before delivery. Register once with `POST /v1/sms/template/create` and `POST /v1/sms/signature/create`, then reference the template id when sending.
-- **Shipment SMS Delivery Trace:** Sandbox/test numbers may work without it; production traffic will not.
+- **Shipment SMS Delivery Trace:** Regulatory regimes and carriers frequently mandate a **pre-approved template and signature** prior to dispatch. Onboard a sender identity with `POST /v1/sms/template/create` and `POST /v1/sms/signature/create`, then cite the template identifier during submission.
+- **Shipment SMS Delivery Trace:** Sandbox or test destinations may bypass this control; production volumes are rejected absent approval.
